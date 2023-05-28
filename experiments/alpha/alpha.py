@@ -101,11 +101,18 @@ class AlphaDataset(Dataset):
 
         x = self.get(idx)
 
+        if 'rank_1_prediction_Immunogenicity_dd94e' not in x:
+            src_ids = torch.tensor([2, 3, 4])
+            # Destination nodes for edges (2, 1), (3, 2), (4, 3)
+            dst_ids = torch.tensor([1, 2, 3])
+            g = dgl.graph((src_ids, dst_ids))
+            return g , 0
+
         g = construct_graph(config=self.config, path= x)
 
         convertor = GraphFormatConvertor(src_format="nx", dst_format="pyg")
-        # g = gp.extract_subgraph_from_chains(g, ["A","B"])
-        g = gp.extract_subgraph_from_chains(g, ["B"])
+        g = gp.extract_subgraph_from_chains(g, ["A","B"])
+        # g = gp.extract_subgraph_from_chains(g, ["B"])
 
         data = convertor(g)
 
@@ -135,6 +142,9 @@ class AlphaDataset(Dataset):
         y = self.get_target(idx, normalize=True)
         y = np.array([y])
 
+
+        print("================================")
+        print(g)
         if self.mode =='train':
             return g, y
         else:
@@ -143,18 +153,25 @@ class AlphaDataset(Dataset):
 
 
 if __name__ == "__main__":
-    def collate(samples):
-        graphs, y = map(list, zip(*samples))
-        batched_graph = dgl.batch(graphs)
-        return batched_graph, torch.tensor(y)
+    mode = 'train'
+    if mode =='train':
+        def collate(samples):
+            graphs, y = map(list, zip(*samples))
+            batched_graph = dgl.batch(graphs)
+            return batched_graph, torch.tensor(y)
+    else:
+        def collate(samples):
+            graphs, y, seq = map(list, zip(*samples))
+            batched_graph = dgl.batch(graphs)
+            return batched_graph, torch.tensor(y), seq
 
     # dataset = AlphaDataset()
-    dataset = AlphaDataset(mode='test',
-                            immuno_path='/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_test_IEDB_A0201_HLAseq_2_csv.csv',
-                            structures_path='/edward-slow-vol/CPSC_552/alpha_structure_test') 
-    dataloader = DataLoader(dataset, batch_size=64, shuffle=True, collate_fn=collate)
+    dataset = AlphaDataset(mode=mode,
+                            immuno_path='/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_train_IEDB_A0201_HLAseq_2_csv.csv',
+                            structures_path='/edward-slow-vol/CPSC_552/alpha_structure') 
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=True, collate_fn=collate)
 
     for data in dataloader:
         print("MINIBATCH")
-        break
         # print(data)
+        # break

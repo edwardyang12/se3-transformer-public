@@ -14,6 +14,7 @@ import wandb
 
 from torch import nn, optim
 from torch.nn import functional as F
+import torch.distributed as dist
 from torch.utils.data import DataLoader
 from alpha import AlphaDataset
 
