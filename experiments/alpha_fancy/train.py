@@ -14,22 +14,57 @@ import wandb
 
 from torch import nn, optim
 from torch.nn import functional as F
+from torch.nn.parallel import DistributedDataParallel
+import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.utils.data import DataLoader
+from dgl.dataloading import GraphDataLoader
 from alpha import AlphaDataset
 
-from experiments.alpha import models #as models
+from experiments.alpha import models 
+
+def init_process_group(world_size, rank):
+    dist.init_process_group(
+        backend='nccl',
+        init_method='tcp://127.0.0.1:12346',
+        world_size=world_size,
+        rank=rank)
+
+def init_model(device, dataset, FLAGS):
+    # Fix seed for random numbers
+    if not FLAGS.seed: FLAGS.seed = 1992 #np.random.randint(100000)
+    torch.manual_seed(FLAGS.seed)
+    np.random.seed(FLAGS.seed)
+
+    # Choose model
+    model = models.__dict__.get(FLAGS.model)(FLAGS.num_layers, 
+                                             dataset.atom_feature_size, 
+                                             FLAGS.num_channels,
+                                             num_nlayers=FLAGS.num_nlayers,
+                                             num_degrees=FLAGS.num_degrees,
+                                             edge_dim=dataset.num_bonds,
+                                             div=FLAGS.div,
+                                             pooling=FLAGS.pooling,
+                                             n_heads=FLAGS.head)
+
+    model = model.to(device)
+    if device.type == 'cpu':
+        model = DistributedDataParallel(model)
+    else:
+        model = DistributedDataParallel(model, device_ids=[device], output_device=device)
+
+    return model
 
 def to_np(x):
     return x.cpu().detach().numpy()
 
-def train_epoch(epoch, model, loss_fnc, dataloader, optimizer, scheduler, FLAGS):
+def train_epoch(epoch, model, loss_fnc, dataloader, optimizer, scheduler, FLAGS, device):
     model.train()
 
     num_iters = len(dataloader)
     for i, (g, y) in enumerate(dataloader):
-        g = g.to(FLAGS.device)
-        y = y.to(FLAGS.device)
+        g = g.to(device)
+        y = y.to(device)
 
         optimizer.zero_grad()
 
@@ -42,9 +77,9 @@ def train_epoch(epoch, model, loss_fnc, dataloader, optimizer, scheduler, FLAGS)
         l1_loss.backward()
         optimizer.step()
 
-        if i % FLAGS.print_interval == 0:
+        if i % FLAGS.print_interval == 0 and device=='cuda:0':
             print(f"[{epoch}|{i}] l1 loss: {l1_loss:.5f} rescale loss: {rescale_loss:.5f} [units]")
-        if i % FLAGS.log_interval == 0:
+        if i % FLAGS.log_interval == 0 and device=='cuda:0':
             wandb.log({"Train L1 loss": to_np(l1_loss), 
                        "Rescale loss": to_np(rescale_loss)})
 
@@ -52,25 +87,6 @@ def train_epoch(epoch, model, loss_fnc, dataloader, optimizer, scheduler, FLAGS)
             sys.exit()
     
         scheduler.step(epoch + i / num_iters)
-
-def test_epoch(epoch, model, loss_fnc, dataloader, FLAGS):
-    model.eval()
-
-    rloss = 0
-    for i, (g, y) in enumerate(dataloader):
-        g = g.to(FLAGS.device)
-        y = y.to(FLAGS.device)
-
-        # run model forward and compute loss
-        # pred = model(g).detach()
-        pred, embedding = model(g).detach()
-        __, __, rl = loss_fnc(pred, y, use_mean=False)
-        rloss += rl
-    rloss /= FLAGS.test_size
-
-    print(f"...[{epoch}|test] rescale loss: {rloss:.5f} [units]")
-    wandb.log({"Test L1 loss": to_np(rloss)})
-
 
 class RandomRotation(object):
     def __init__(self):
@@ -86,43 +102,35 @@ def collate(samples):
     batched_graph = dgl.batch(graphs)
     return batched_graph, torch.tensor(y)
 
-def main(FLAGS, UNPARSED_ARGV):
+def main(rank, world_size, dataset, FLAGS, UNPARSED_ARGV):
+    if rank==0:
+        # Log all args to wandb
+        if FLAGS.name:
+                wandb.init(project=f'{FLAGS.wandb}', name=f'{FLAGS.name}')
+        else:
+                wandb.init(project=f'{FLAGS.wandb}')
+
+    init_process_group(world_size, rank)
+    if torch.cuda.is_available():
+        device = torch.device('cuda:{:d}'.format(rank))
+        torch.cuda.set_device(device)
+    else:
+        device = torch.device('cpu')
 
     # Prepare data
-    train_dataset = AlphaDataset(mode='train', 
-                               transform=RandomRotation())
-#     train_dataset = AlphaDataset(mode='train')
-    train_loader = DataLoader(train_dataset, 
-                              batch_size=FLAGS.batch_size, 
-			      shuffle=True, 
-                              collate_fn=collate, 
-                              num_workers=FLAGS.num_workers)
+    train_loader = GraphDataLoader(dataset, use_ddp=True, 
+                                        batch_size= FLAGS.batch_size,
+                                        shuffle= True)
 
+#     train_loader = DataLoader(dataset, 
+#                               batch_size=FLAGS.batch_size, 
+# 			      shuffle=True, 
+#                               collate_fn=collate, 
+#                               num_workers=FLAGS.num_workers)
 
-#     test_dataset = AlphaDataset(mode='test') 
-#     test_loader = DataLoader(test_dataset, 
-#                              batch_size=FLAGS.batch_size, 
-# 			     shuffle=False, 
-#                              collate_fn=collate, 
-#                              num_workers=FLAGS.num_workers)
+    FLAGS.train_size = len(dataset)
 
-    FLAGS.train_size = len(train_dataset)
-#     FLAGS.test_size = len(test_dataset)
-
-    # Choose model
-    model = models.__dict__.get(FLAGS.model)(FLAGS.num_layers, 
-                                             train_dataset.atom_feature_size, 
-                                             FLAGS.num_channels,
-                                             num_nlayers=FLAGS.num_nlayers,
-                                             num_degrees=FLAGS.num_degrees,
-                                             edge_dim=train_dataset.num_bonds,
-                                             div=FLAGS.div,
-                                             pooling=FLAGS.pooling,
-                                             n_heads=FLAGS.head)
-    if FLAGS.restore is not None:
-        model.load_state_dict(torch.load(FLAGS.restore))
-    model.to(FLAGS.device)
-    #wandb.watch(model)
+    model = init_model(device, dataset, FLAGS)
 
     # Optimizer settings
     optimizer = optim.Adam(model.parameters(), lr=FLAGS.lr)
@@ -138,7 +146,7 @@ def main(FLAGS, UNPARSED_ARGV):
             l1_loss /= pred.shape[0]
             l2_loss /= pred.shape[0]
 
-        rescale_loss = train_dataset.norm2units(l1_loss)
+        rescale_loss = dataset.norm2units(l1_loss)
         return l1_loss, l2_loss, rescale_loss
 
     # Save path
@@ -150,9 +158,8 @@ def main(FLAGS, UNPARSED_ARGV):
         torch.save(model.state_dict(), save_path)
         print(f"Saved: {save_path}")
 
-        train_epoch(epoch, model, task_loss, train_loader, optimizer, scheduler, FLAGS)
-        # test_epoch(epoch, model, task_loss, test_loader, FLAGS)
-
+        train_epoch(epoch, model, task_loss, train_loader, optimizer, scheduler, FLAGS, device)
+    dist.destroy_process_group()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -194,8 +201,6 @@ if __name__ == '__main__':
             help="Number of steps between printing key stats")
     parser.add_argument('--save_dir', type=str, default="models",
             help="Directory name to save models")
-    parser.add_argument('--restore', type=str, default=None,
-            help="Path to model to restore")
     parser.add_argument('--wandb', type=str, default='equivariant-attention', 
             help="wandb project name")
 
@@ -204,6 +209,8 @@ if __name__ == '__main__':
             help="Number of data loader workers")
     parser.add_argument('--profile', action='store_true',
             help="Exit after 10 steps for profiling")
+    parser.add_argument('--gpus', type=int, default=1, 
+            help="Number of gpus")
 
     # Random seed for both Numpy and Pytorch
     parser.add_argument('--seed', type=int, default=None)
@@ -218,22 +225,13 @@ if __name__ == '__main__':
     if not os.path.isdir(FLAGS.save_dir):
         os.makedirs(FLAGS.save_dir)
 
-    # Fix seed for random numbers
-    if not FLAGS.seed: FLAGS.seed = 1992 #np.random.randint(100000)
-    torch.manual_seed(FLAGS.seed)
-    np.random.seed(FLAGS.seed)
-
-    # Automatically choose GPU if available
-    FLAGS.device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
-
-    # Log all args to wandb
-    if FLAGS.name:
-        wandb.init(project=f'{FLAGS.wandb}', name=f'{FLAGS.name}')
-    else:
-        wandb.init(project=f'{FLAGS.wandb}')
-
     print("\n\nFLAGS:", FLAGS)
     print("UNPARSED_ARGV:", UNPARSED_ARGV, "\n\n")
 
+    dataset = AlphaDataset(mode='train', 
+                               transform=RandomRotation())
+
     # Where the magic is
-    main(FLAGS, UNPARSED_ARGV)
+    num_gpus = FLAGS.gpus
+    procs = []
+    mp.spawn(main, args=(num_gpus, dataset, FLAGS, UNPARSED_ARGV), nprocs=num_gpus)
