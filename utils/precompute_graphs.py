@@ -33,9 +33,9 @@ import graphein.protein as gp
 immuno_path = '/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_train_IEDB_A0201_HLAseq_2_csv.csv'
 structures_path = '/edward-slow-vol/CPSC_552/alpha_structure'
 
-new_edge_funcs = {"edge_construction_functions": [add_atomic_edges]
+new_edge_funcs = {"edge_construction_functions": [add_peptide_bonds]
                   ,"node_metadata_functions": [amino_acid_one_hot,hydrogen_bond_acceptor,hydrogen_bond_donor, expasy_protein_scale]
-                  ,"granularity": "atom"
+                  ,"granularity": "CA"
                   ,"exclude_waters": False}
 
 config = ProteinGraphConfig(**new_edge_funcs)
@@ -47,7 +47,7 @@ atom_labels = ['NE', 'CG1', 'CE2', 'OG1', 'CE1', 'OG', 'OE2', 'CZ3', 'OD2', 'OD1
 atom_labels = sorted(atom_labels)
 atom_labels = {string: [int(i == idx) for idx in range(len(atom_labels))] for i, string in enumerate(atom_labels)}
 
-save_path = '/edward-slow-vol/CPSC_552/alpha_dgl_test'
+save_path = '/edward-slow-vol/CPSC_552/alpha_dgl_l2'
 
 def load_data(structures_path, immuno_path):
     inputs = []
@@ -106,7 +106,7 @@ def generate(x):
     atom_encoded = [atom_labels[x] for x in atoms]
     atom_encoded = torch.tensor(atom_encoded[-data.num_nodes:])
 
-    data.x = torch.cat([atom_encoded], dim =1)
+    data.x = torch.cat([one_hot], dim =1)
 
     data['coords'] = data['coords'].float()
 

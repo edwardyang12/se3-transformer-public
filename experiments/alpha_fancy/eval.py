@@ -68,8 +68,8 @@ def test_epoch(epoch, model, loss_fnc, dataloader, FLAGS):
     cbar = plt.colorbar(im1).set_ticks([])
     plt.savefig('embedding.png')
 
-    with open('embeddings.pickle', 'wb') as f:
-        pickle.dump(seq_dict, f)
+#     with open('embeddings.pickle', 'wb') as f:
+#         pickle.dump(seq_dict, f)
     
 
 def collate(samples):
@@ -116,8 +116,6 @@ def main(FLAGS, UNPARSED_ARGV):
 
         rescale_loss = test_dataset.norm2units(l1_loss)
         return l1_loss, l2_loss, rescale_loss
-
-    # Save path
 
     # Run training
     print('Begin evaluation')

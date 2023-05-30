@@ -77,9 +77,9 @@ def train_epoch(epoch, model, loss_fnc, dataloader, optimizer, scheduler, FLAGS,
         l1_loss.backward()
         optimizer.step()
 
-        if i % FLAGS.print_interval == 0 and device=='cuda:0':
+        if i % FLAGS.print_interval == 0 and str(device) == 'cuda:0':
             print(f"[{epoch}|{i}] l1 loss: {l1_loss:.5f} rescale loss: {rescale_loss:.5f} [units]")
-        if i % FLAGS.log_interval == 0 and device=='cuda:0':
+        if i % FLAGS.log_interval == 0 and str(device) =='cuda:0':
             wandb.log({"Train L1 loss": to_np(l1_loss), 
                        "Rescale loss": to_np(rescale_loss)})
 
@@ -191,6 +191,12 @@ if __name__ == '__main__':
             help="Learning rate")
     parser.add_argument('--num_epochs', type=int, default=50, 
             help="Number of epochs")
+    parser.add_argument('--atoms', type=int, default=36, 
+            help="Number of atom features")
+    parser.add_argument('--bonds', type=int, default=1, 
+            help="Number of bonds")
+    parser.add_argument('--dataset', type=str, default='/edward-slow-vol/CPSC_552/alpha_dgl_l2', 
+            help="Dataset path")
 
     # Logging
     parser.add_argument('--name', type=str, default=None,
@@ -229,7 +235,10 @@ if __name__ == '__main__':
     print("UNPARSED_ARGV:", UNPARSED_ARGV, "\n\n")
 
     dataset = AlphaDataset(mode='train', 
-                               transform=RandomRotation())
+                               transform=RandomRotation(),
+                               graph_path = FLAGS.dataset,
+                               atom_feature_size = FLAGS.atoms,
+                               num_bonds= FLAGS.bonds)
 
     # Where the magic is
     num_gpus = FLAGS.gpus

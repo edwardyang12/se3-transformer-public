@@ -12,18 +12,12 @@ from torch.utils.data import Dataset, DataLoader
 
 class AlphaDataset(Dataset):
 
-    atom_feature_size = 36 # NOTE change this depenending on number of node features
-    # numbers may be wrong
-    # 36 is number of atoms ?
-    # 20 is number of amino acids 
-    # 2 is hydrogen acceptor and donor ?
-    # 42 is number of additional properties ?
-    num_bonds = 1
-
     def __init__(self, 
             immuno_path = '/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_train_IEDB_A0201_HLAseq_2_csv.csv', 
             structures_path = '/edward-slow-vol/CPSC_552/alpha_structure', 
             graph_path = '/edward-slow-vol/CPSC_552/alpha_dgl',
+            atom_feature_size = 36,
+            num_bonds = 1,
             mode: str='train', 
             transform=None): 
         self.immuno_path = immuno_path
@@ -33,6 +27,15 @@ class AlphaDataset(Dataset):
         self.transform = transform
         self.load_data()
         self.len = len(self.targets)
+
+
+        self.atom_feature_size = atom_feature_size # NOTE change this depenending on number of node features
+        # numbers may be wrong
+        # 36 is number of atoms 
+        # 20 is number of amino acids 
+        # 2 is hydrogen acceptor and donor ?
+        # 42 is number of additional properties ?
+        self.num_bonds = num_bonds
 
         print(f"Loaded {mode}-set, source: {self.immuno_path}, length: {len(self)}")
     
