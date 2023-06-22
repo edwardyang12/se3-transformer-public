@@ -13,16 +13,23 @@ from torch.utils.data import Dataset, DataLoader
 class AlphaDataset(Dataset):
 
     def __init__(self, 
-            immuno_path = '/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_train_IEDB_A0201_HLAseq_2_csv.csv', 
-            structures_path = '/edward-slow-vol/CPSC_552/alpha_structure', 
-            graph_path = '/edward-slow-vol/CPSC_552/alpha_dgl',
+            immuno_path = '/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_multi_allele_for_Edward.csv', 
+            structures_path = '/edward-slow-vol/CPSC_552/alpha_multi/alpha_structure',
+            HLA = '/edward-slow-vol/CPSC_552/immunoai/data/HLA_27_seqs.txt', 
+            graph_path = '/edward-slow-vol/CPSC_552/alpha_multi/alpha_dgl_l11',
+            split_path = '/edward-slow-vol/CPSC_552/alpha_multi/split.pickle',
             atom_feature_size = 36,
             num_bonds = 1,
-            mode: str='train', 
+            mode: 'train', # train, val, test
             transform=None): 
         self.immuno_path = immuno_path
         self.structures_path = structures_path
+        self.HLA = HLA
         self.graph_path = graph_path
+
+        with open(split_path, 'rb') as p:
+            self.split = pickle.load(p)[mode]
+
         self.mode = mode
         self.transform = transform
         self.load_data()
@@ -44,6 +51,14 @@ class AlphaDataset(Dataset):
     
     def load_data(self):
 
+        HLA_processed = {}
+        with open(self.HLA, 'r') as f:
+            for count, line in enumerate(f):
+                if count == 0:
+                    continue 
+                allele, seq = line.strip().split("\t")
+                HLA_processed[allele] = seq
+
         self.inputs = []
         self.targets = []
         self.immuno_list = []
@@ -53,20 +68,22 @@ class AlphaDataset(Dataset):
             with open(self.immuno_path, "r") as f:
                 reader = csv.reader(f)
                 for count, line in enumerate(reader):
-                    if count==0:
+                    count -=1
+
+                    if count<0 or count not in self.split:
                         continue
-                    count = count - 1
 
-                    peptide = line[0].replace("J", "")
-                    sequence = line[1]
-                    sequence = sequence + peptide
-                    self.sequence_list.append(line[0])
+                    peptide = line[1]
+                    allele = line[2]
+                    sequence = HLA_processed[allele]+peptide
+                    self.sequence_list.append(peptide)
 
-                    enrichment = float(line[2])
-                    immuno = float(line[3])
+                    enrichment = float(line[4])
+                    immuno = int(line[3])
 
                     x = self.graph_path + "/rank_1_" + mapping[sequence] + ".bin"
                     if not os.path.isfile(x) or os.stat(x).st_size == 0:
+                        print(x)
                         continue
 
                     self.inputs.append(x)
@@ -129,7 +146,6 @@ class AlphaDataset(Dataset):
             return g, y, self.sequence_list[idx]
         
 
-
 if __name__ == "__main__":
     mode = 'train'
     if mode =='train':
@@ -143,10 +159,8 @@ if __name__ == "__main__":
             batched_graph = dgl.batch(graphs)
             return batched_graph, torch.tensor(y), seq
 
-    dataset = AlphaDataset(mode=mode,
-                            immuno_path='/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_train_IEDB_A0201_HLAseq_2_csv.csv',
-                            structures_path='/edward-slow-vol/CPSC_552/alpha_structure',
-                            graph_path = '/edward-slow-vol/CPSC_552/alpha_dgl') 
+    dataset = AlphaDataset(mode = mode, atom_feature_size = 58) 
+    print(len(dataset))
     dataloader = DataLoader(dataset, batch_size=1, shuffle=True, collate_fn=collate)
 
     for data in dataloader:

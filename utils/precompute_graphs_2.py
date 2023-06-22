@@ -30,8 +30,9 @@ from graphein.protein.subgraphs import extract_subgraph_by_sequence_position
 import graphein.protein as gp
 
 # need to change these two for testing
-immuno_path = '/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_train_IEDB_A0201_HLAseq_2_csv.csv'
-structures_path = '/edward-slow-vol/CPSC_552/alpha_structure'
+HLA = "/edward-slow-vol/CPSC_552/immunoai/data/HLA_27_seqs.txt"
+pep = "/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_multi_allele_for_Edward.txt"
+structures_path = '/edward-slow-vol/CPSC_552/alpha_multi/alpha_structure'
 
 new_edge_funcs = {"edge_construction_functions": [add_peptide_bonds]
                   ,"node_metadata_functions": [amino_acid_one_hot,hydrogen_bond_acceptor,hydrogen_bond_donor, expasy_protein_scale]
@@ -40,43 +41,26 @@ new_edge_funcs = {"edge_construction_functions": [add_peptide_bonds]
 
 config = ProteinGraphConfig(**new_edge_funcs)
 
-sequence_positions = range(1, 185)
 convertor = GraphFormatConvertor(src_format="nx", dst_format="pyg")
 
-atom_labels = ['NE', 'CG1', 'CE2', 'OG1', 'CE1', 'OG', 'OE2', 'CZ3', 'OD2', 'OD1', 'NE2', 'CD', 'NZ', 'CZ2', 'SG', 'OE1', 'O', 'CE', 'CZ', 'CA', 'ND2', 'NH1', 'ND1', 'OH', 'CD2', 'NH2', 'CH2', 'CD1', 'CG2', 'C', 'CB', 'CG', 'NE1', 'SD', 'CE3', 'N']
-atom_labels = sorted(atom_labels)
-atom_labels = {string: [int(i == idx) for idx in range(len(atom_labels))] for i, string in enumerate(atom_labels)}
+save_path = '/edward-slow-vol/CPSC_552/alpha_multi/alpha_dgl_l11'
 
-save_path = '/edward-slow-vol/CPSC_552/alpha_dgl_l5'
-
-def load_data(structures_path, immuno_path):
+def load_data(structures_path, peptides):
     inputs = []
     with open(structures_path + '/mapping.pickle', 'rb') as p:
         mapping = pickle.load(p)
-        with open(immuno_path, "r") as f:
-            reader = csv.reader(f)
-            for count, line in enumerate(reader):
-                if count==0:
-                    continue
-                count = count - 1
-
-                peptide = line[0].replace("J", "")
-                sequence = line[1]
-                sequence = sequence + peptide
-
-                x = structures_path + "/rank_1_" + mapping[sequence] + ".pdb"
-                if not os.path.isfile(x) or os.stat(x).st_size == 0:
-                    continue
-
-                inputs.append(x)
+        for pep in peptides:
+            x = structures_path + "/rank_1_" + mapping[pep] + ".pdb"
+            if not os.path.isfile(x) or os.stat(x).st_size == 0:
+                print(x)
+                continue
+            inputs.append(x)
     return inputs
 
 def generate(x):
     data_label = x.split("/")[-1][:-4]
 
     g = construct_graph(config=config, path= x)
-    # s_g = extract_subgraph_by_sequence_position(g, sequence_positions)
-    # g = gp.extract_subgraph_from_chains(s_g, ["A","B"])
     g = gp.extract_subgraph_from_chains(g, ["A", "B"])
 
     data = convertor(g)
@@ -101,10 +85,6 @@ def generate(x):
     physio_chem = [d['expasy'].tolist() for n, d in g.nodes(data=True)]
     physio_chem = torch.tensor(physio_chem[-data.num_nodes:])
 
-    # atom type
-    atoms = [d['atom_type'] for n, d in g.nodes(data=True)]
-    atom_encoded = [atom_labels[x] for x in atoms]
-    atom_encoded = torch.tensor(atom_encoded[-data.num_nodes:])
 
     data.x = torch.cat([one_hot, h_donors, h_acceptors], dim =1)
 
@@ -122,7 +102,23 @@ def generate(x):
     save_graphs(save_path +"/"+ data_label + ".bin", [g])
 
 if __name__ == "__main__":
-    inputs = load_data(structures_path, immuno_path)
+    HLA_processed = {}
+    with open(HLA, 'r') as f:
+        for count, line in enumerate(f):
+            if count == 0:
+                continue 
+            allele, seq = line.strip().split("\t")
+            HLA_processed[allele] = seq
+
+    peptides = set()
+    with open(pep, 'r') as f:
+        for count, line in enumerate(f):
+            if count == 0:
+                continue 
+            pep, allele, _ = line.strip().split("\t")
+            peptides.add(HLA_processed[allele]+pep)
+
+    inputs = load_data(structures_path, peptides)
 
     CPUS = 4
     pool = multiprocessing.Pool(CPUS)

@@ -2,7 +2,9 @@ import warnings
 
 import dgl
 import torch
-
+import random
+import csv
+import pickle
 
 def to_np(x):
     return x.cpu().detach().numpy()
@@ -62,3 +64,81 @@ def update_relative_positions(G, *, relative_position_key='d', absolute_position
     src, dst = G.all_edges()
     absolute_positions = G.ndata[absolute_position_key]
     G.edata[relative_position_key] = absolute_positions[dst] - absolute_positions[src]
+
+def split_data(path, split= [.8,.1,.1],
+                data= "/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_multi_allele_for_Edward.csv", 
+                HLA="/edward-slow-vol/CPSC_552/immunoai/data/HLA_27_seqs.txt"):
+    HLA_processed = {}
+    with open(HLA, 'r') as f:
+        for count, line in enumerate(f):
+            if count == 0:
+                continue 
+            allele, seq = line.strip().split("\t")
+            HLA_processed[allele] = seq
+
+    all_seqs = []
+    with open(data, "r") as f:
+        reader = csv.reader(f)
+        for count, line in enumerate(reader):
+            if count==0:
+                continue
+
+            peptide = line[1]
+            allele = line[2]
+            sequence = HLA_processed[allele]+peptide
+
+            enrichment = float(line[4])
+            immuno = int(line[3])
+
+            all_seqs.append((sequence,immuno))
+    print(count)
+
+    # assign to train, val, test
+    distribute = random.choices([0, 1, 2], weights=split, k=len(all_seqs)) 
+    trainset = set()
+    valset = set()
+    testset = set()
+    for x,y in enumerate(distribute):
+        if y==0:
+            trainset.add(x)
+        elif y==1:
+            valset.add(x)
+        else:
+            testset.add(x)
+
+    distribution ={
+        'train': trainset,
+        'val': valset,
+        'test': testset
+    }
+
+    with open(path + '/split.pickle', 'wb') as handle:
+        pickle.dump(distribution, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    train_y = 0
+    train_n = 0
+    val_y = 0
+    val_n = 0
+    test_y = 0
+    test_n = 0
+    for i, (location, seq) in enumerate(zip(distribute, all_seqs)): 
+        if location==0: # train
+            if seq[1]==0: # non immuno
+                train_n +=1
+            else:
+                train_y +=1
+        elif location==1: # val
+            if seq[1]==0: # non immuno
+                val_n +=1
+            else:
+                val_y +=1
+        else: # test
+            if seq[1]==0: # non immuno
+                test_n +=1
+            else:
+                test_y +=1
+    
+    print(train_y, train_n, val_y, val_n, test_y, test_n)
+
+if __name__ == "__main__":
+    split_data('/edward-slow-vol/CPSC_552/alpha_multi')
