@@ -18,9 +18,9 @@ class AlphaDataset(Dataset):
             HLA = '/edward-slow-vol/CPSC_552/immunoai/data/HLA_27_seqs.txt', 
             graph_path = '/edward-slow-vol/CPSC_552/alpha_multi/alpha_dgl_l11',
             split_path = '/edward-slow-vol/CPSC_552/alpha_multi/split.pickle',
-            atom_feature_size = 36,
+            atom_feature_size = 22,
             num_bonds = 1,
-            mode: 'train', # train, val, test
+            mode= 'train', # train, val, test
             transform=None): 
         self.immuno_path = immuno_path
         self.structures_path = structures_path
@@ -76,7 +76,7 @@ class AlphaDataset(Dataset):
                     peptide = line[1]
                     allele = line[2]
                     sequence = HLA_processed[allele]+peptide
-                    self.sequence_list.append(peptide)
+                    self.sequence_list.append(sequence)
 
                     enrichment = float(line[4])
                     immuno = int(line[3])
@@ -161,9 +161,9 @@ if __name__ == "__main__":
 
     dataset = AlphaDataset(mode = mode, atom_feature_size = 58) 
     print(len(dataset))
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=True, collate_fn=collate)
+    dataloader = DataLoader(dataset, batch_size=10, shuffle=True, collate_fn=collate)
 
     for data in dataloader:
         print("MINIBATCH")
-        # print(data)
-        # break
+        print(data)
+        break

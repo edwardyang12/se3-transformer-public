@@ -60,7 +60,7 @@ def init_model(device, dataset, FLAGS):
 def to_np(x):
     return x.cpu().detach().numpy()
 
-def train_epoch(epoch, model, loss_fnc, dataloader, optimizer, scheduler, FLAGS, device):
+def train_epoch(epoch, model, dataloader, optimizer, scheduler, FLAGS, device, train_dataset):
     model.train()
 
     num_iters = len(dataloader)
@@ -73,7 +73,7 @@ def train_epoch(epoch, model, loss_fnc, dataloader, optimizer, scheduler, FLAGS,
         # run model forward and compute loss
         # pred = model(g)
         pred, embedding = model(g)
-        l1_loss, __, rescale_loss = loss_fnc(pred, y)
+        l1_loss, __, rescale_loss = task_loss(pred, y, train_dataset)
 
         # backprop
         l1_loss.backward()
@@ -87,19 +87,19 @@ def train_epoch(epoch, model, loss_fnc, dataloader, optimizer, scheduler, FLAGS,
     
         scheduler.step(epoch + i / num_iters)
 
-def val_epoch(epoch, model, loss_fnc, dataloader, FLAGS, device):
+def val_epoch(epoch, model, dataloader, FLAGS, device, val_dataset):
     model.eval()
 
     rloss = 0
     l1loss = 0
-    for i, (g, y) in enumerate(dataloader):
+    for i, (g, y, seq) in enumerate(dataloader):
         g = g.to(device)
         y = y.to(device)
 
         # run model forward and compute loss
         # pred = model(g)
         pred, embedding = model(g)
-        l1_loss, __, rescale_loss = loss_fnc(pred.detach(), y, use_mean=False)
+        l1_loss, __, rescale_loss = task_loss(pred.detach(), y, val_dataset, use_mean=False)
         rloss += rescale_loss
         l1loss += l1_loss
     rloss /= FLAGS.val_size
@@ -109,6 +109,7 @@ def val_epoch(epoch, model, loss_fnc, dataloader, FLAGS, device):
     wandb.log({"Val L1 loss": to_np(l1loss), 
                 "Val Rescale loss": to_np(rloss)})
 
+    return l1loss
 
 class RandomRotation(object):
     def __init__(self):
@@ -125,14 +126,14 @@ def collate(samples):
     return batched_graph, torch.tensor(y)
 
 # Loss function
-def task_loss(pred, target, use_mean=True):
+def task_loss(pred, target, dataset, use_mean=True):
     l1_loss = torch.sum(torch.abs(pred - target))
     l2_loss = torch.sum((pred - target)**2)
     if use_mean:
         l1_loss /= pred.shape[0]
         l2_loss /= pred.shape[0]
 
-    rescale_loss = train_dataset.norm2units(l1_loss)
+    rescale_loss = dataset.norm2units(l1_loss)
     return l1_loss, l2_loss, rescale_loss
 
 def main(rank, world_size, train_dataset, val_dataset, FLAGS, UNPARSED_ARGV):
@@ -172,15 +173,21 @@ def main(rank, world_size, train_dataset, val_dataset, FLAGS, UNPARSED_ARGV):
 
     # Save path
     save_path = os.path.join(FLAGS.save_dir, FLAGS.name + '.pt')
+    best_path = os.path.join(FLAGS.save_dir, FLAGS.name + '_best.pt')
 
     # Run training
     print('Begin training')
+    lowest_l1 = float('inf')
     for epoch in range(FLAGS.num_epochs):
         torch.save(model.state_dict(), save_path)
         print(f"Saved: {save_path}")
 
-        train_epoch(epoch, model, task_loss, train_loader, optimizer, scheduler, FLAGS, device)
-        val_epoch(epoch, model, task_loss, val_loader, FLAGS, device)
+        train_epoch(epoch, model, train_loader, optimizer, scheduler, FLAGS, device, train_dataset)
+        l1loss = val_epoch(epoch, model, val_loader, FLAGS, device, val_dataset)
+
+        if l1loss< lowest_l1:
+            torch.save(model.state_dict(), best_path)
+            
     dist.destroy_process_group()
 
 if __name__ == '__main__':
