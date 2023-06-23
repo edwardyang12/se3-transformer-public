@@ -64,6 +64,8 @@ def train_epoch(epoch, model, dataloader, optimizer, scheduler, FLAGS, device, t
     model.train()
 
     num_iters = len(dataloader)
+    dataloader.set_epoch(epoch)
+    
     for i, (g, y) in enumerate(dataloader):
         g = g.to(device)
         y = y.to(device)
@@ -106,8 +108,9 @@ def val_epoch(epoch, model, dataloader, FLAGS, device, val_dataset):
     l1loss /= FLAGS.val_size
 
     print(f"...[{epoch}|val] rescale loss: {rloss:.5f} [units]")
-    wandb.log({"Val L1 loss": to_np(l1loss), 
-                "Val Rescale loss": to_np(rloss)})
+    if str(device) =='cuda:0':
+        wandb.log({"Val L1 loss": to_np(l1loss), 
+                    "Val Rescale loss": to_np(rloss)})
 
     return l1loss
 
@@ -155,7 +158,7 @@ def main(rank, world_size, train_dataset, val_dataset, FLAGS, UNPARSED_ARGV):
     train_loader = GraphDataLoader(train_dataset, use_ddp=True, 
                                         batch_size= FLAGS.batch_size,
                                         shuffle= True)
-    val_loader = GraphDataLoader(val_dataset, use_ddp=True, 
+    val_loader = GraphDataLoader(val_dataset,
                                         batch_size= 1,
                                         shuffle= False)
 

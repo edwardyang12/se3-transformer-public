@@ -8,6 +8,7 @@ import torch
 import pickle
 import csv
 
+from dgl.dataloading import GraphDataLoader
 from torch.utils.data import Dataset, DataLoader
 
 class AlphaDataset(Dataset):
@@ -161,9 +162,12 @@ if __name__ == "__main__":
 
     dataset = AlphaDataset(mode = mode, atom_feature_size = 58) 
     print(len(dataset))
-    dataloader = DataLoader(dataset, batch_size=10, shuffle=True, collate_fn=collate)
+    dataloader = GraphDataLoader(dataset, use_ddp=False, 
+                                        batch_size= 32,
+                                        shuffle= True)
 
-    for data in dataloader:
-        print("MINIBATCH")
-        print(data)
-        break
+    for i in range(5):
+        for data in dataloader:
+            print("MINIBATCH")
+            print(data)
+            break
