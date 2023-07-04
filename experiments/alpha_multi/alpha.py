@@ -17,7 +17,7 @@ class AlphaDataset(Dataset):
             immuno_path = '/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_multi_allele_for_Edward.csv', 
             structures_path = '/edward-slow-vol/CPSC_552/alpha_multi/alpha_structure',
             HLA = '/edward-slow-vol/CPSC_552/immunoai/data/HLA_27_seqs.txt', 
-            graph_path = '/edward-slow-vol/CPSC_552/alpha_multi/alpha_dgl_l11',
+            graph_path = '/edward-slow-vol/CPSC_552/alpha_multi/alpha_dgl_l12',
             split_path = '/edward-slow-vol/CPSC_552/alpha_multi/split.pickle',
             atom_feature_size = 22,
             num_bonds = 1,

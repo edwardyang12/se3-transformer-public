@@ -34,16 +34,18 @@ HLA = "/edward-slow-vol/CPSC_552/immunoai/data/HLA_27_seqs.txt"
 pep = "/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_multi_allele_for_Edward.txt"
 structures_path = '/edward-slow-vol/CPSC_552/alpha_multi/alpha_structure'
 
-new_edge_funcs = {"edge_construction_functions": [add_peptide_bonds]
-                  ,"node_metadata_functions": [amino_acid_one_hot,hydrogen_bond_acceptor,hydrogen_bond_donor, expasy_protein_scale]
+new_edge_funcs = {"edge_construction_functions": [add_peptide_bonds, add_hydrophobic_interactions]	
+                  ,"node_metadata_functions": [amino_acid_one_hot, hydrogen_bond_acceptor, hydrogen_bond_donor]
                   ,"granularity": "CA"
                   ,"exclude_waters": False}
 
 config = ProteinGraphConfig(**new_edge_funcs)
 
+SEQUENCE_POSITIONS = range(1, 185)
+
 convertor = GraphFormatConvertor(src_format="nx", dst_format="pyg")
 
-save_path = '/edward-slow-vol/CPSC_552/alpha_multi/alpha_dgl_l11'
+save_path = '/edward-slow-vol/CPSC_552/alpha_multi/alpha_dgl_l11a'
 
 def load_data(structures_path, peptides):
     inputs = []
@@ -61,6 +63,7 @@ def generate(x):
     data_label = x.split("/")[-1][:-4]
 
     g = construct_graph(config=config, path= x)
+    g = extract_subgraph_by_sequence_position(g, SEQUENCE_POSITIONS)
     g = gp.extract_subgraph_from_chains(g, ["A", "B"])
 
     data = convertor(g)
@@ -80,11 +83,6 @@ def generate(x):
     # h acceptors
     h_acceptors = [d['hbond_acceptors'] for n, d in g.nodes(data=True)]
     h_acceptors = torch.tensor(h_acceptors[-data.num_nodes:])
-
-    # physio chem 
-    physio_chem = [d['expasy'].tolist() for n, d in g.nodes(data=True)]
-    physio_chem = torch.tensor(physio_chem[-data.num_nodes:])
-
 
     data.x = torch.cat([one_hot, h_donors, h_acceptors], dim =1)
 

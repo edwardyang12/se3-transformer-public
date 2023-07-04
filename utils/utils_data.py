@@ -67,7 +67,8 @@ def update_relative_positions(G, *, relative_position_key='d', absolute_position
 
 def split_data(path, split= [.8,.1,.1],
                 data= "/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_multi_allele_for_Edward.csv", 
-                HLA="/edward-slow-vol/CPSC_552/immunoai/data/HLA_27_seqs.txt"):
+                HLA="/edward-slow-vol/CPSC_552/immunoai/data/HLA_27_seqs.txt",
+                length=11):
     HLA_processed = {}
     with open(HLA, 'r') as f:
         for count, line in enumerate(f):
@@ -84,6 +85,9 @@ def split_data(path, split= [.8,.1,.1],
                 continue
 
             peptide = line[1]
+            if len(peptide)!=length:
+                continue
+                
             allele = line[2]
             sequence = HLA_processed[allele]+peptide
 
@@ -112,7 +116,7 @@ def split_data(path, split= [.8,.1,.1],
         'test': testset
     }
 
-    with open(path + '/split.pickle', 'wb') as handle:
+    with open(path + '/split' + str(length) + '.pickle', 'wb') as handle:
         pickle.dump(distribution, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     train_y = 0

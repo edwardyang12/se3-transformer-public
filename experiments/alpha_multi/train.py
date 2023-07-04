@@ -229,6 +229,8 @@ if __name__ == '__main__':
             help="Number of bonds")
     parser.add_argument('--dataset', type=str, default='/edward-slow-vol/CPSC_552/alpha_dgl_l2', 
             help="Dataset path")
+    parser.add_argument('--split', type=str, default='/edward-slow-vol/CPSC_552/alpha_multi/split.pickle', 
+            help="Split path")
 
     # Logging
     parser.add_argument('--name', type=str, default=None,
@@ -270,13 +272,15 @@ if __name__ == '__main__':
                                transform=RandomRotation(),
                                graph_path = FLAGS.dataset,
                                atom_feature_size = FLAGS.atoms,
-                               num_bonds= FLAGS.bonds)
+                               num_bonds= FLAGS.bonds, 
+                               split_path = FLAGS.split)
 
     val_dataset = AlphaDataset(mode='val', 
                                transform=RandomRotation(),
                                graph_path = FLAGS.dataset,
                                atom_feature_size = FLAGS.atoms,
-                               num_bonds= FLAGS.bonds)
+                               num_bonds= FLAGS.bonds, 
+                               split_path = FLAGS.split)
 
     # Where the magic is
     num_gpus = FLAGS.gpus
