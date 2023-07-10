@@ -46,6 +46,8 @@ def init_model(device, dataset, FLAGS):
                                              div=FLAGS.div,
                                              pooling=FLAGS.pooling,
                                              n_heads=FLAGS.head)
+    if FLAGS.restore is not None:
+        model.load_state_dict(torch.load(FLAGS.restore))
 
     model = model.to(device)
     if device.type == 'cpu':
@@ -58,10 +60,12 @@ def init_model(device, dataset, FLAGS):
 def to_np(x):
     return x.cpu().detach().numpy()
 
-def train_epoch(epoch, model, loss_fnc, dataloader, optimizer, scheduler, FLAGS, device):
+def train_epoch(epoch, model, dataloader, optimizer, scheduler, FLAGS, device, train_dataset):
     model.train()
 
     num_iters = len(dataloader)
+    dataloader.set_epoch(epoch)
+    
     for i, (g, y) in enumerate(dataloader):
         g = g.to(device)
         y = y.to(device)
@@ -71,7 +75,7 @@ def train_epoch(epoch, model, loss_fnc, dataloader, optimizer, scheduler, FLAGS,
         # run model forward and compute loss
         # pred = model(g)
         pred, embedding = model(g)
-        l1_loss, __, rescale_loss = loss_fnc(pred, y)
+        l1_loss, __, rescale_loss = task_loss(pred, y, train_dataset)
 
         # backprop
         l1_loss.backward()
@@ -82,11 +86,33 @@ def train_epoch(epoch, model, loss_fnc, dataloader, optimizer, scheduler, FLAGS,
         if i % FLAGS.log_interval == 0 and str(device) =='cuda:0':
             wandb.log({"Train L1 loss": to_np(l1_loss), 
                        "Rescale loss": to_np(rescale_loss)})
-
-        if FLAGS.profile and i == 10:
-            sys.exit()
     
         scheduler.step(epoch + i / num_iters)
+
+def val_epoch(epoch, model, dataloader, FLAGS, device, val_dataset):
+    model.eval()
+
+    rloss = 0
+    l1loss = 0
+    for i, (g, y, seq) in enumerate(dataloader):
+        g = g.to(device)
+        y = y.to(device)
+
+        # run model forward and compute loss
+        # pred = model(g)
+        pred, embedding = model(g)
+        l1_loss, __, rescale_loss = task_loss(pred.detach(), y, val_dataset, use_mean=False)
+        rloss += rescale_loss
+        l1loss += l1_loss
+    rloss /= FLAGS.val_size
+    l1loss /= FLAGS.val_size
+
+    print(f"...[{epoch}|val] rescale loss: {rloss:.5f} [units]")
+    if str(device) =='cuda:0':
+        wandb.log({"Val L1 loss": to_np(l1loss), 
+                    "Val Rescale loss": to_np(rloss)})
+
+    return l1loss
 
 class RandomRotation(object):
     def __init__(self):
@@ -102,7 +128,18 @@ def collate(samples):
     batched_graph = dgl.batch(graphs)
     return batched_graph, torch.tensor(y)
 
-def main(rank, world_size, dataset, FLAGS, UNPARSED_ARGV):
+# Loss function
+def task_loss(pred, target, dataset, use_mean=True):
+    l1_loss = torch.sum(torch.abs(pred - target))
+    l2_loss = torch.sum((pred - target)**2)
+    if use_mean:
+        l1_loss /= pred.shape[0]
+        l2_loss /= pred.shape[0]
+
+    rescale_loss = dataset.norm2units(l1_loss)
+    return l1_loss, l2_loss, rescale_loss
+
+def main(rank, world_size, train_dataset, val_dataset, FLAGS, UNPARSED_ARGV):
     if rank==0:
         # Log all args to wandb
         if FLAGS.name:
@@ -118,19 +155,18 @@ def main(rank, world_size, dataset, FLAGS, UNPARSED_ARGV):
         device = torch.device('cpu')
 
     # Prepare data
-    train_loader = GraphDataLoader(dataset, use_ddp=True, 
+    train_loader = GraphDataLoader(train_dataset, use_ddp=True, 
                                         batch_size= FLAGS.batch_size,
                                         shuffle= True)
+    val_loader = GraphDataLoader(val_dataset,
+                                        batch_size= 1,
+                                        shuffle= False)
 
-#     train_loader = DataLoader(dataset, 
-#                               batch_size=FLAGS.batch_size, 
-# 			      shuffle=True, 
-#                               collate_fn=collate, 
-#                               num_workers=FLAGS.num_workers)
 
-    FLAGS.train_size = len(dataset)
+    FLAGS.train_size = len(train_dataset)
+    FLAGS.val_size = len(val_dataset)
 
-    model = init_model(device, dataset, FLAGS)
+    model = init_model(device, train_dataset, FLAGS)
 
     # Optimizer settings
     optimizer = optim.Adam(model.parameters(), lr=FLAGS.lr)
@@ -138,27 +174,23 @@ def main(rank, world_size, dataset, FLAGS, UNPARSED_ARGV):
                                                                FLAGS.num_epochs, 
                                                                eta_min=1e-4)
 
-    # Loss function
-    def task_loss(pred, target, use_mean=True):
-        l1_loss = torch.sum(torch.abs(pred - target))
-        l2_loss = torch.sum((pred - target)**2)
-        if use_mean:
-            l1_loss /= pred.shape[0]
-            l2_loss /= pred.shape[0]
-
-        rescale_loss = dataset.norm2units(l1_loss)
-        return l1_loss, l2_loss, rescale_loss
-
     # Save path
     save_path = os.path.join(FLAGS.save_dir, FLAGS.name + '.pt')
+    best_path = os.path.join(FLAGS.save_dir, FLAGS.name + '_best.pt')
 
     # Run training
     print('Begin training')
+    lowest_l1 = float('inf')
     for epoch in range(FLAGS.num_epochs):
         torch.save(model.state_dict(), save_path)
         print(f"Saved: {save_path}")
 
-        train_epoch(epoch, model, task_loss, train_loader, optimizer, scheduler, FLAGS, device)
+        train_epoch(epoch, model, train_loader, optimizer, scheduler, FLAGS, device, train_dataset)
+        l1loss = val_epoch(epoch, model, val_loader, FLAGS, device, val_dataset)
+
+        if l1loss< lowest_l1:
+            torch.save(model.state_dict(), best_path)
+            
     dist.destroy_process_group()
 
 if __name__ == '__main__':
@@ -197,6 +229,8 @@ if __name__ == '__main__':
             help="Number of bonds")
     parser.add_argument('--dataset', type=str, default='/edward-slow-vol/CPSC_552/alpha_dgl_l2', 
             help="Dataset path")
+    parser.add_argument('--split', type=str, default='/edward-slow-vol/CPSC_552/alpha_multi/split.pickle', 
+            help="Split path")
 
     # Logging
     parser.add_argument('--name', type=str, default=None,
@@ -207,14 +241,14 @@ if __name__ == '__main__':
             help="Number of steps between printing key stats")
     parser.add_argument('--save_dir', type=str, default="models",
             help="Directory name to save models")
+    parser.add_argument('--restore', type=str, default=None,
+            help="Path to model to restore")
     parser.add_argument('--wandb', type=str, default='equivariant-attention', 
             help="wandb project name")
 
     # Miscellanea
     parser.add_argument('--num_workers', type=int, default=4, 
             help="Number of data loader workers")
-    parser.add_argument('--profile', action='store_true',
-            help="Exit after 10 steps for profiling")
     parser.add_argument('--gpus', type=int, default=1, 
             help="Number of gpus")
 
@@ -234,13 +268,21 @@ if __name__ == '__main__':
     print("\n\nFLAGS:", FLAGS)
     print("UNPARSED_ARGV:", UNPARSED_ARGV, "\n\n")
 
-    dataset = AlphaDataset(mode='train', 
+    train_dataset = AlphaDataset(mode='train', 
                                transform=RandomRotation(),
                                graph_path = FLAGS.dataset,
                                atom_feature_size = FLAGS.atoms,
-                               num_bonds= FLAGS.bonds)
+                               num_bonds= FLAGS.bonds, 
+                               split_path = FLAGS.split)
+
+    val_dataset = AlphaDataset(mode='val', 
+                               transform=RandomRotation(),
+                               graph_path = FLAGS.dataset,
+                               atom_feature_size = FLAGS.atoms,
+                               num_bonds= FLAGS.bonds, 
+                               split_path = FLAGS.split)
 
     # Where the magic is
     num_gpus = FLAGS.gpus
     procs = []
-    mp.spawn(main, args=(num_gpus, dataset, FLAGS, UNPARSED_ARGV), nprocs=num_gpus)
+    mp.spawn(main, args=(num_gpus, train_dataset, val_dataset, FLAGS, UNPARSED_ARGV), nprocs=num_gpus)

@@ -79,9 +79,8 @@ def collate(samples):
 
 def main(FLAGS, UNPARSED_ARGV):
     # Prepare data
-    test_dataset = AlphaDataset(mode='test',
-                                immuno_path='/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_test_IEDB_A0201_HLAseq_2_csv.csv',
-                                structures_path='/edward-slow-vol/CPSC_552/alpha_structure_test') 
+    test_dataset = AlphaDataset(mode='test', atom_feature_size = FLAGS.atoms,
+                               num_bonds= FLAGS.bonds)
     test_loader = DataLoader(test_dataset, 
                              batch_size=FLAGS.batch_size, 
 			     shuffle=False, 

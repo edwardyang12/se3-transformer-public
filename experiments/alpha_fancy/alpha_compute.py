@@ -13,13 +13,29 @@ warnings.filterwarnings('ignore')
 
 from torch.utils.data import Dataset, DataLoader
 from graphein.protein.config import ProteinGraphConfig
+from graphein.protein.edges.distance import add_hydrogen_bond_interactions, add_peptide_bonds
 from graphein.protein.graphs import construct_graph
 from graphein.protein.features.nodes.amino_acid import amino_acid_one_hot
-from graphein.ml import ProteinGraphListDataset, GraphFormatConvertor
+from graphein.protein.features.nodes.amino_acid import hydrogen_bond_acceptor
+from graphein.protein.features.nodes.amino_acid import hydrogen_bond_donor
+from graphein.protein.edges.intramolecular import hydrogen_bond, hydrophobic, peptide_bonds, van_der_waals
+from graphein.ml.conversion import GraphFormatConvertor
+from graphein.protein.edges.distance import add_aromatic_interactions, add_cation_pi_interactions, add_hydrophobic_interactions, add_ionic_interactions
+from graphein.protein.edges.atomic import add_atomic_edges, add_bond_order
+from graphein.protein.features.nodes.dssp import asa 
+from graphein.protein.features.nodes.amino_acid import expasy_protein_scale
+from graphein.protein.features.nodes.geometry import add_sidechain_vector
+from graphein.protein.subgraphs import extract_subgraph_by_sequence_position
+import graphein.protein as gp
 
 class AlphaDataset(Dataset):
 
-    atom_feature_size = 20
+    atom_feature_size = 36 # NOTE change this depenending on number of node features
+    # numbers may be wrong
+    # 36 is number of atoms ?
+    # 20 is number of amino acids 
+    # 2 is hydrogen acceptor and donor ?
+    # 42 is number of additional properties ?
     num_bonds = 1
 
     def __init__(self, 
@@ -31,10 +47,22 @@ class AlphaDataset(Dataset):
         self.structures_path = structures_path
         self.mode = mode
         self.transform = transform
-        self.config = ProteinGraphConfig(**{"node_metadata_functions": [amino_acid_one_hot]})
+        self.new_edge_funcs = {"edge_construction_functions": [add_atomic_edges]
+                  ,"node_metadata_functions": [amino_acid_one_hot,hydrogen_bond_acceptor,hydrogen_bond_donor, expasy_protein_scale]
+                  ,"granularity": "atom"
+                  ,"exclude_waters": False}
+        self.config = ProteinGraphConfig(**self.new_edge_funcs)
 
         self.load_data()
         self.len = len(self.targets)
+        self.convertor = GraphFormatConvertor(src_format="nx", dst_format="pyg")
+        self.sequence_positions = range(1, 60)
+        
+        atom_labels = ['NE', 'CG1', 'CE2', 'OG1', 'CE1', 'OG', 'OE2', 'CZ3', 'OD2', 'OD1', 'NE2', 'CD', 'NZ', 'CZ2', 'SG', 'OE1', 'O', 'CE', 'CZ', 'CA', 'ND2', 'NH1', 'ND1', 'OH', 'CD2', 'NH2', 'CH2', 'CD1', 'CG2', 'C', 'CB', 'CG', 'NE1', 'SD', 'CE3', 'N']
+        atom_labels = sorted(atom_labels)
+        self.atom_labels = {string: [int(i == idx) for idx in range(len(atom_labels))] for i, string in enumerate(atom_labels)}
+
+
         print(f"Loaded {mode}-set, source: {self.immuno_path}, length: {len(self)}")
     
     def __len__(self):
@@ -101,29 +129,46 @@ class AlphaDataset(Dataset):
 
         x = self.get(idx)
 
-        if 'rank_1_prediction_Immunogenicity_dd94e' not in x:
-            src_ids = torch.tensor([2, 3, 4])
-            # Destination nodes for edges (2, 1), (3, 2), (4, 3)
-            dst_ids = torch.tensor([1, 2, 3])
-            g = dgl.graph((src_ids, dst_ids))
-            return g , 0
+        # if 'rank_1_prediction_Immunogenicity_dd94e' not in x:
+        #     src_ids = torch.tensor([2, 3, 4])
+        #     # Destination nodes for edges (2, 1), (3, 2), (4, 3)
+        #     dst_ids = torch.tensor([1, 2, 3])
+        #     g = dgl.graph((src_ids, dst_ids))
+        #     return g , 0
 
         g = construct_graph(config=self.config, path= x)
+        # s_g = extract_subgraph_by_sequence_position(g, self.sequence_positions)
+        # g = gp.extract_subgraph_from_chains(s_g, ["A","B"])
+        g = gp.extract_subgraph_from_chains(g, ["B"])
 
-        convertor = GraphFormatConvertor(src_format="nx", dst_format="pyg")
-        g = gp.extract_subgraph_from_chains(g, ["A","B"])
-        # g = gp.extract_subgraph_from_chains(g, ["B"])
-
-        data = convertor(g)
+        data = self.convertor(g)
 
         data.edge_index = torch_geometric.utils.to_undirected(data.edge_index)
         start = data['edge_index'][0]
         end = data['edge_index'][1]
 
+        # one hot
         one_hot = [d['amino_acid_one_hot'] for n, d in g.nodes(data=True)]
-        one_hot = one_hot[-data.num_nodes:]
-        node_features = torch.tensor(one_hot)
-        data.x = node_features
+        one_hot = torch.tensor(one_hot[-data.num_nodes:])
+
+        # h donors
+        h_donors = [d['hbond_donors'] for n, d in g.nodes(data=True)]
+        h_donors = torch.tensor(h_donors[-data.num_nodes:])
+
+        # h acceptors
+        h_acceptors = [d['hbond_acceptors'] for n, d in g.nodes(data=True)]
+        h_acceptors = torch.tensor(h_acceptors[-data.num_nodes:])
+
+        # physio chem 
+        physio_chem = [d['expasy'].tolist() for n, d in g.nodes(data=True)]
+        physio_chem = torch.tensor(physio_chem[-data.num_nodes:])
+
+        # atom type
+        atoms = [d['atom_type'] for n, d in g.nodes(data=True)]
+        atom_encoded = [self.atom_labels[x] for x in atoms]
+        atom_encoded = torch.tensor(atom_encoded[-data.num_nodes:])
+
+        data.x = torch.cat([atom_encoded], dim =1)
 
         row, col = data.edge_index
 
@@ -142,9 +187,8 @@ class AlphaDataset(Dataset):
         y = self.get_target(idx, normalize=True)
         y = np.array([y])
 
-
-        print("================================")
-        print(g)
+        # print("================================")
+        # print(g)
         if self.mode =='train':
             return g, y
         else:
