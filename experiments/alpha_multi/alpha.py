@@ -14,11 +14,11 @@ from torch.utils.data import Dataset, DataLoader
 class AlphaDataset(Dataset):
 
     def __init__(self, 
-            immuno_path = '/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_multi_allele_for_Edward.csv', 
-            structures_path = '/edward-slow-vol/CPSC_552/alpha_multi/alpha_structure',
-            HLA = '/edward-slow-vol/CPSC_552/immunoai/data/HLA_27_seqs.txt', 
-            graph_path = '/edward-slow-vol/CPSC_552/alpha_multi/alpha_dgl_l12',
-            split_path = '/edward-slow-vol/CPSC_552/alpha_multi/split.pickle',
+            immuno_path = '/home/ey229/project/data/immuno_data_multi_allele_for_Edward.csv', 
+            structures_path = '/home/ey229/project/data',
+            HLA = '/home/ey229/project/data/HLA_27_seqs.txt', 
+            graph_path = '/home/ey229/project/data/alpha_dgl_l12',
+            split_path = '/home/ey229/project/data/split.pickle',
             atom_feature_size = 22,
             num_bonds = 1,
             mode= 'train', # train, val, test

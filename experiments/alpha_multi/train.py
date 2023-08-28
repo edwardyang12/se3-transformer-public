@@ -26,7 +26,7 @@ from experiments.alpha import models
 def init_process_group(world_size, rank):
     dist.init_process_group(
         backend='nccl',
-        init_method='tcp://127.0.0.1:12346',
+        init_method='tcp://127.0.0.1:12347', # change this for each run
         world_size=world_size,
         rank=rank)
 
