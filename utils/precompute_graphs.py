@@ -9,7 +9,6 @@ import torch
 import pickle
 import torch_geometric
 import csv
-from tqdm import tqdm
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -30,24 +29,24 @@ from graphein.protein.subgraphs import extract_subgraph_by_sequence_position
 import graphein.protein as gp
 
 # need to change these two for testing
-immuno_path = '/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_train_IEDB_A0201_HLAseq_2_csv.csv'
-structures_path = '/edward-slow-vol/CPSC_552/alpha_structure'
+immuno_path = '/home/ey229/project/immunoai/data/immuno_data_train_IEDB_A0201_HLAseq_2_csv.csv'
+structures_path = '/home/ey229/project/data/alpha_single/alpha_structure'
 
 new_edge_funcs = {"edge_construction_functions": [add_peptide_bonds]
-                  ,"node_metadata_functions": [amino_acid_one_hot,hydrogen_bond_acceptor,hydrogen_bond_donor, expasy_protein_scale]
+                  ,"node_metadata_functions": [amino_acid_one_hot,hydrogen_bond_acceptor,hydrogen_bond_donor]
                   ,"granularity": "CA"
                   ,"exclude_waters": False}
 
 config = ProteinGraphConfig(**new_edge_funcs)
 
-sequence_positions = range(1, 185)
+sequence_positions = range(1, 180)
 convertor = GraphFormatConvertor(src_format="nx", dst_format="pyg")
 
 atom_labels = ['NE', 'CG1', 'CE2', 'OG1', 'CE1', 'OG', 'OE2', 'CZ3', 'OD2', 'OD1', 'NE2', 'CD', 'NZ', 'CZ2', 'SG', 'OE1', 'O', 'CE', 'CZ', 'CA', 'ND2', 'NH1', 'ND1', 'OH', 'CD2', 'NH2', 'CH2', 'CD1', 'CG2', 'C', 'CB', 'CG', 'NE1', 'SD', 'CE3', 'N']
 atom_labels = sorted(atom_labels)
 atom_labels = {string: [int(i == idx) for idx in range(len(atom_labels))] for i, string in enumerate(atom_labels)}
 
-save_path = '/edward-slow-vol/CPSC_552/alpha_dgl_l5'
+save_path = '/home/ey229/project/data/alpha_single/alpha_dgl_l4'
 
 def load_data(structures_path, immuno_path):
     inputs = []
@@ -75,9 +74,9 @@ def generate(x):
     data_label = x.split("/")[-1][:-4]
 
     g = construct_graph(config=config, path= x)
-    # s_g = extract_subgraph_by_sequence_position(g, sequence_positions)
-    # g = gp.extract_subgraph_from_chains(s_g, ["A","B"])
-    g = gp.extract_subgraph_from_chains(g, ["A", "B"])
+    s_g = extract_subgraph_by_sequence_position(g, sequence_positions)
+    g = gp.extract_subgraph_from_chains(s_g, ["A","B"])
+    # g = gp.extract_subgraph_from_chains(g, ["A", "B"])
 
     data = convertor(g)
 
@@ -98,13 +97,13 @@ def generate(x):
     h_acceptors = torch.tensor(h_acceptors[-data.num_nodes:])
 
     # physio chem 
-    physio_chem = [d['expasy'].tolist() for n, d in g.nodes(data=True)]
-    physio_chem = torch.tensor(physio_chem[-data.num_nodes:])
+    # physio_chem = [d['expasy'].tolist() for n, d in g.nodes(data=True)]
+    # physio_chem = torch.tensor(physio_chem[-data.num_nodes:])
 
     # atom type
-    atoms = [d['atom_type'] for n, d in g.nodes(data=True)]
-    atom_encoded = [atom_labels[x] for x in atoms]
-    atom_encoded = torch.tensor(atom_encoded[-data.num_nodes:])
+    # atoms = [d['atom_type'] for n, d in g.nodes(data=True)]
+    # atom_encoded = [atom_labels[x] for x in atoms]
+    # atom_encoded = torch.tensor(atom_encoded[-data.num_nodes:])
 
     data.x = torch.cat([one_hot, h_donors, h_acceptors], dim =1)
 
@@ -124,6 +123,6 @@ def generate(x):
 if __name__ == "__main__":
     inputs = load_data(structures_path, immuno_path)
 
-    CPUS = 4
+    CPUS = 8
     pool = multiprocessing.Pool(CPUS)
     result = pool.map(generate, inputs)

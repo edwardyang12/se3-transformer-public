@@ -2,49 +2,39 @@ import os
 import sys
 
 import dgl
-from dgl.data.utils import load_graphs
 import numpy as np
 import torch
 import pickle
+import graphein.protein as gp
+import torch_geometric
 import csv
+import warnings
+warnings.filterwarnings('ignore')
 
-from dgl.dataloading import GraphDataLoader
 from torch.utils.data import Dataset, DataLoader
+from graphein.protein.config import ProteinGraphConfig
+from graphein.protein.graphs import construct_graph
+from graphein.protein.features.nodes.amino_acid import amino_acid_one_hot
+from graphein.ml import ProteinGraphListDataset, GraphFormatConvertor
 
 class AlphaDataset(Dataset):
 
+    atom_feature_size = 20
+    num_bonds = 1
+
     def __init__(self, 
-            immuno_path = '/home/ey229/project/immunoai/data/immuno_data_train_IEDB_A0201_HLAseq_2_csv.csv', 
-            structures_path = '/home/ey229/project/data/alpha_single/alpha_structure',
-            graph_path = '/home/ey229/project/data/alpha_single/alpha_dgl_l4',
-            split_path = None,
-            atom_feature_size = 22,
-            num_bonds = 1,
-            mode= 'train', # train, val, test
+            immuno_path= '/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_train_IEDB_A0201_HLAseq_2_csv.csv', 
+            structures_path= '/edward-slow-vol/CPSC_552/alpha_structure', 
+            mode: str='train', 
             transform=None): 
         self.immuno_path = immuno_path
         self.structures_path = structures_path
-        self.graph_path = graph_path
-
-        if split_path:
-            with open(split_path, 'rb') as p:
-                self.split = pickle.load(p)[mode]
-        else:
-            self.split = None
-
         self.mode = mode
         self.transform = transform
+        self.config = ProteinGraphConfig(**{"node_metadata_functions": [amino_acid_one_hot]})
+
         self.load_data()
         self.len = len(self.targets)
-
-
-        self.atom_feature_size = atom_feature_size # NOTE change this depenending on number of node features
-        # 36 is number of atoms 
-        # 20 is number of amino acids 
-        # 2 is hydrogen acceptor and donor
-        # 61 is number of additional properties
-        self.num_bonds = num_bonds
-
         print(f"Loaded {mode}-set, source: {self.immuno_path}, length: {len(self)}")
     
     def __len__(self):
@@ -61,21 +51,20 @@ class AlphaDataset(Dataset):
             with open(self.immuno_path, "r") as f:
                 reader = csv.reader(f)
                 for count, line in enumerate(reader):
-                    count -=1
-                    if count<0 or (self.split and count not in self.split):
+                    if count==0:
                         continue
+                    count = count - 1
 
                     peptide = line[0].replace("J", "")
                     sequence = line[1]
                     sequence = sequence + peptide
-                    self.sequence_list.append(sequence)
+                    self.sequence_list.append(line[0])
 
                     enrichment = float(line[2])
-                    immuno = int(line[3])
+                    immuno = float(line[3])
 
-                    x = self.graph_path + "/rank_1_" + mapping[sequence] + ".bin"
+                    x = self.structures_path + "/rank_1_" + mapping[sequence] + ".pdb"
                     if not os.path.isfile(x) or os.stat(x).st_size == 0:
-                        print(x)
                         continue
 
                     self.inputs.append(x)
@@ -112,31 +101,56 @@ class AlphaDataset(Dataset):
 
         x = self.get(idx)
 
-        # if 'rank_1_prediction_Immunogenicity_dd94e' not in x:
-        #     src_ids = torch.tensor([2, 3, 4])
-        #     # Destination nodes for edges (2, 1), (3, 2), (4, 3)
-        #     dst_ids = torch.tensor([1, 2, 3])
-        #     g = dgl.graph((src_ids, dst_ids))
-        #     return g , 0
+        if 'rank_1_prediction_Immunogenicity_dd94e' not in x:
+            src_ids = torch.tensor([2, 3, 4])
+            # Destination nodes for edges (2, 1), (3, 2), (4, 3)
+            dst_ids = torch.tensor([1, 2, 3])
+            g = dgl.graph((src_ids, dst_ids))
+            return g , 0
 
-        glist, label_dict = load_graphs(x)
-        g = glist[0]
+        g = construct_graph(config=self.config, path= x)
+
+        convertor = GraphFormatConvertor(src_format="nx", dst_format="pyg")
+        g = gp.extract_subgraph_from_chains(g, ["A","B"])
+        # g = gp.extract_subgraph_from_chains(g, ["B"])
+
+        data = convertor(g)
+
+        data.edge_index = torch_geometric.utils.to_undirected(data.edge_index)
+        start = data['edge_index'][0]
+        end = data['edge_index'][1]
+
+        one_hot = [d['amino_acid_one_hot'] for n, d in g.nodes(data=True)]
+        one_hot = one_hot[-data.num_nodes:]
+        node_features = torch.tensor(one_hot)
+        data.x = node_features
+
+        row, col = data.edge_index
+
+        g = dgl.graph((row, col))
 
         # Augmentation on the coordinates
         if self.transform:
-            g.ndata['x'] = self.transform(g.ndata['x'])
+            data['coords'] = self.transform(data['coords']).float()
+
+        g.ndata['x'] = data['coords']
+        g.ndata['f'] = torch.unsqueeze(data['x'],2).float()
+        g.edata['d'] = (data['coords'][start] - data['coords'][end]).float()
+        g.edata['w'] = torch.ones(g.edata['d'].shape[0],1).float() # all edges are of the same type
 
         # Load target
         y = self.get_target(idx, normalize=True)
         y = np.array([y])
 
-        # print("================================")
-        # print(g)
+
+        print("================================")
+        print(g)
         if self.mode =='train':
             return g, y
         else:
             return g, y, self.sequence_list[idx]
         
+
 
 if __name__ == "__main__":
     mode = 'train'
@@ -151,14 +165,13 @@ if __name__ == "__main__":
             batched_graph = dgl.batch(graphs)
             return batched_graph, torch.tensor(y), seq
 
-    dataset = AlphaDataset(mode = mode, atom_feature_size = 22) 
-    print(len(dataset))
-    dataloader = GraphDataLoader(dataset, use_ddp=False, 
-                                        batch_size= 32,
-                                        shuffle= True)
+    # dataset = AlphaDataset()
+    dataset = AlphaDataset(mode=mode,
+                            immuno_path='/edward-slow-vol/CPSC_552/immunoai/data/immuno_data_train_IEDB_A0201_HLAseq_2_csv.csv',
+                            structures_path='/edward-slow-vol/CPSC_552/alpha_structure') 
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=True, collate_fn=collate)
 
-    for i in range(5):
-        for data in dataloader:
-            print("MINIBATCH")
-            print(data)
-            break
+    for data in dataloader:
+        print("MINIBATCH")
+        # print(data)
+        # break
