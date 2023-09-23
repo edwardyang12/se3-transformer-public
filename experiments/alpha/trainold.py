@@ -15,7 +15,7 @@ import wandb
 from torch import nn, optim
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
-from alpha import AlphaDataset
+from alpha_old import AlphaDataset
 
 from experiments.alpha import models #as models
 

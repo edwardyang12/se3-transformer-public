@@ -26,11 +26,12 @@ from graphein.protein.features.nodes.dssp import asa
 from graphein.protein.features.nodes.amino_acid import expasy_protein_scale
 from graphein.protein.features.nodes.geometry import add_sidechain_vector
 from graphein.protein.subgraphs import extract_subgraph_by_sequence_position
+from graphein.protein.graphs import read_pdb_to_dataframe
 import graphein.protein as gp
 
 # need to change these two for testing
-immuno_path = '/home/ey229/project/immunoai/data/immuno_data_train_IEDB_A0201_HLAseq_2_csv.csv'
-structures_path = '/home/ey229/project/data/alpha_single/alpha_structure'
+immuno_path = '/home/ey229/project/immunoai/data/immuno_data_test_IEDB_A0201_HLAseq_2_csv.csv'
+structures_path = '/home/ey229/project/data/alpha_single/alpha_structure_test'
 
 new_edge_funcs = {"edge_construction_functions": [add_peptide_bonds]
                   ,"node_metadata_functions": [amino_acid_one_hot,hydrogen_bond_acceptor,hydrogen_bond_donor]
@@ -38,15 +39,34 @@ new_edge_funcs = {"edge_construction_functions": [add_peptide_bonds]
                   ,"exclude_waters": False}
 
 config = ProteinGraphConfig(**new_edge_funcs)
+LENGTH = 180
 
-sequence_positions = range(1, 180)
+sequence_positions = range(1, LENGTH)
 convertor = GraphFormatConvertor(src_format="nx", dst_format="pyg")
 
-atom_labels = ['NE', 'CG1', 'CE2', 'OG1', 'CE1', 'OG', 'OE2', 'CZ3', 'OD2', 'OD1', 'NE2', 'CD', 'NZ', 'CZ2', 'SG', 'OE1', 'O', 'CE', 'CZ', 'CA', 'ND2', 'NH1', 'ND1', 'OH', 'CD2', 'NH2', 'CH2', 'CD1', 'CG2', 'C', 'CB', 'CG', 'NE1', 'SD', 'CE3', 'N']
-atom_labels = sorted(atom_labels)
-atom_labels = {string: [int(i == idx) for idx in range(len(atom_labels))] for i, string in enumerate(atom_labels)}
+enc_dict = {'GLY': [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+ 'SER': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+ 'HIS': [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+ 'MET': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+ 'ARG': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+ 'TYR': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+ 'PHE': [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+ 'THR': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+ 'VAL': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+ 'PRO': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+ 'GLU': [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+ 'ILE': [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+ 'ALA': [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+ 'ASP': [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+ 'GLN': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+ 'TRP': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+ 'LYS': [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+ 'LEU': [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+ 'ASN': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+ 'CYS': [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+ 'MASK': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}
 
-save_path = '/home/ey229/project/data/alpha_single/alpha_dgl_l4'
+save_path = '/home/ey229/project/data/alpha_single/alpha_dgl_l4_1_test'
 
 def load_data(structures_path, immuno_path):
     inputs = []
@@ -76,25 +96,32 @@ def generate(x):
     g = construct_graph(config=config, path= x)
     s_g = extract_subgraph_by_sequence_position(g, sequence_positions)
     g = gp.extract_subgraph_from_chains(s_g, ["A","B"])
-    # g = gp.extract_subgraph_from_chains(g, ["A", "B"])
+    # g = gp.extract_subgraph_from_chains(g, ["B"])
 
     data = convertor(g)
+    tdf = read_pdb_to_dataframe(x)
 
-    data.edge_index = torch_geometric.utils.to_undirected(data.edge_index)
-    start = data['edge_index'][0]
-    end = data['edge_index'][1]
+    tdfa = tdf[tdf['chain_id'] == 'A']
+    tdfa = tdfa.drop_duplicates('residue_number')
+    tdfa = tdfa[:LENGTH-1]
+    sequence_a = tdfa['residue_name'].tolist()
 
-    # one hot
-    one_hot = [d['amino_acid_one_hot'] for n, d in g.nodes(data=True)]
-    one_hot = torch.tensor(one_hot[-data.num_nodes:])
+    tdfb = tdf[tdf['chain_id'] == 'B']
+    tdfb = tdfb.drop_duplicates('residue_number')
+    sequence_b = tdfb['residue_name'].tolist()
+
+    #amino acid one-hot encoding
+    aa_one_hot_a = torch.tensor([enc_dict[x] for x in sequence_a])
+    aa_one_hot_b = torch.tensor([enc_dict[x] for x in sequence_b])
+    aa_one_hot = torch.cat([aa_one_hot_a, aa_one_hot_b], dim=0)
+
+    # both ways give the same output encoding but the amino acids it corresponds with are wrong! 
+    # one_hot = torch.tensor([d['amino_acid_one_hot'] for n, d in g.nodes(data=True)])
 
     # h donors
-    h_donors = [d['hbond_donors'] for n, d in g.nodes(data=True)]
-    h_donors = torch.tensor(h_donors[-data.num_nodes:])
-
+    h_donors = torch.tensor([d['hbond_donors'] for n, d in g.nodes(data=True)])
     # h acceptors
-    h_acceptors = [d['hbond_acceptors'] for n, d in g.nodes(data=True)]
-    h_acceptors = torch.tensor(h_acceptors[-data.num_nodes:])
+    h_acceptors = torch.tensor([d['hbond_acceptors'] for n, d in g.nodes(data=True)])
 
     # physio chem 
     # physio_chem = [d['expasy'].tolist() for n, d in g.nodes(data=True)]
@@ -105,7 +132,11 @@ def generate(x):
     # atom_encoded = [atom_labels[x] for x in atoms]
     # atom_encoded = torch.tensor(atom_encoded[-data.num_nodes:])
 
-    data.x = torch.cat([one_hot, h_donors, h_acceptors], dim =1)
+    data.x = torch.cat([aa_one_hot, h_donors, h_acceptors], dim =1)
+
+    data.edge_index = torch_geometric.utils.to_undirected(data.edge_index)
+    start = data['edge_index'][0]
+    end = data['edge_index'][1]
 
     data['coords'] = data['coords'].float()
 

@@ -26,7 +26,7 @@ from experiments.alpha import models
 def init_process_group(world_size, rank):
     dist.init_process_group(
         backend='nccl',
-        init_method='tcp://127.0.0.1:12347', # change this for each run
+        init_method='tcp://127.0.0.1:12342', # change this for each run
         world_size=world_size,
         rank=rank)
 
@@ -35,6 +35,8 @@ def init_model(device, dataset, FLAGS):
     if not FLAGS.seed: FLAGS.seed = 1992 #np.random.randint(100000)
     torch.manual_seed(FLAGS.seed)
     np.random.seed(FLAGS.seed)
+
+    epoch = 0
 
     # Choose model
     model = models.__dict__.get(FLAGS.model)(FLAGS.num_layers, 
@@ -46,16 +48,26 @@ def init_model(device, dataset, FLAGS):
                                              div=FLAGS.div,
                                              pooling=FLAGS.pooling,
                                              n_heads=FLAGS.head)
-    if FLAGS.restore is not None:
-        model.load_state_dict(torch.load(FLAGS.restore))
-
+     
     model = model.to(device)
     if device.type == 'cpu':
         model = DistributedDataParallel(model)
     else:
         model = DistributedDataParallel(model, device_ids=[device], output_device=device)
 
-    return model
+    optimizer = optim.Adam(model.parameters(), lr=FLAGS.lr)
+
+    if FLAGS.restore is not None and wandb.run.resumed:
+        checkpoint = torch.load(wandb.restore(FLAGS.restore))
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        epoch = checkpoint['epoch']          
+
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, 
+                                                               FLAGS.num_epochs, 
+                                                               eta_min=1e-4)
+
+    return model, optimizer, scheduler, epoch
 
 def to_np(x):
     return x.cpu().detach().numpy()
@@ -70,24 +82,26 @@ def train_epoch(epoch, model, dataloader, optimizer, scheduler, FLAGS, device, t
         g = g.to(device)
         y = y.to(device)
 
-        optimizer.zero_grad()
-
         # run model forward and compute loss
         # pred = model(g)
         pred, embedding = model(g)
         l1_loss, __, rescale_loss = task_loss(pred, y, train_dataset)
 
         # backprop
+        optimizer.zero_grad()
         l1_loss.backward()
         optimizer.step()
 
         if i % FLAGS.print_interval == 0 and str(device) == 'cuda:0':
-            print(f"[{epoch}|{i}] l1 loss: {l1_loss:.5f} rescale loss: {rescale_loss:.5f} [units]")
-        if i % FLAGS.log_interval == 0 and str(device) =='cuda:0':
-            wandb.log({"Train L1 loss": to_np(l1_loss), 
-                       "Rescale loss": to_np(rescale_loss)})
+            print(f"[{epoch}|{i}] l1 loss: {l1_loss:.5f}")
+        if i % FLAGS.log_interval == 0 and str(device) == 'cuda:0':
+            wandb.log({"Train L1 loss": to_np(l1_loss)})
+
+    if str(device) =='cuda:0':
+        wandb.log({"Train Epoch L1 loss": to_np(l1_loss)}, step=epoch)
+
+    scheduler.step(epoch)
     
-        scheduler.step(epoch + i / num_iters)
 
 def val_epoch(epoch, model, dataloader, FLAGS, device, val_dataset):
     model.eval()
@@ -107,10 +121,9 @@ def val_epoch(epoch, model, dataloader, FLAGS, device, val_dataset):
     rloss /= FLAGS.val_size
     l1loss /= FLAGS.val_size
 
-    print(f"...[{epoch}|val] rescale loss: {rloss:.5f} [units]")
+    print(f"...[{epoch}|val] l1 loss: {l1_loss:.5f}")
     if str(device) =='cuda:0':
-        wandb.log({"Val L1 loss": to_np(l1loss), 
-                    "Val Rescale loss": to_np(rloss)})
+        wandb.log({"Val L1 loss": to_np(l1loss)}, step=epoch)
 
     return l1loss
 
@@ -140,10 +153,13 @@ def task_loss(pred, target, dataset, use_mean=True):
     return l1_loss, l2_loss, rescale_loss
 
 def main(rank, world_size, train_dataset, val_dataset, FLAGS, UNPARSED_ARGV):
+    resume = False
+    if FLAGS.restore is not None:
+        resume = True
     if rank==0:
         # Log all args to wandb
         if FLAGS.name:
-                wandb.init(project=f'{FLAGS.wandb}', name=f'{FLAGS.name}')
+                wandb.init(project=f'{FLAGS.wandb}', name=f'{FLAGS.name}', resume=resume)
         else:
                 wandb.init(project=f'{FLAGS.wandb}')
 
@@ -166,30 +182,34 @@ def main(rank, world_size, train_dataset, val_dataset, FLAGS, UNPARSED_ARGV):
     FLAGS.train_size = len(train_dataset)
     FLAGS.val_size = len(val_dataset)
 
-    model = init_model(device, train_dataset, FLAGS)
-
-    # Optimizer settings
-    optimizer = optim.Adam(model.parameters(), lr=FLAGS.lr)
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, 
-                                                               FLAGS.num_epochs, 
-                                                               eta_min=1e-4)
-
-    # Save path
-    save_path = os.path.join(FLAGS.save_dir, FLAGS.name + '.pt')
-    best_path = os.path.join(FLAGS.save_dir, FLAGS.name + '_best.pt')
+    model, optimizer, scheduler, epoch = init_model(device, train_dataset, FLAGS)
 
     # Run training
     print('Begin training')
     lowest_l1 = float('inf')
-    for epoch in range(FLAGS.num_epochs):
-        torch.save(model.state_dict(), save_path)
-        print(f"Saved: {save_path}")
-
+    while epoch < FLAGS.num_epochs:
+        
         train_epoch(epoch, model, train_loader, optimizer, scheduler, FLAGS, device, train_dataset)
         l1loss = val_epoch(epoch, model, val_loader, FLAGS, device, val_dataset)
 
-        if l1loss< lowest_l1:
-            torch.save(model.state_dict(), best_path)
+        if epoch%20==0 and epoch>0 and rank==0:
+            save_path = os.path.join(FLAGS.save_dir, FLAGS.name + '_' + str(epoch) + '.pt')
+            print(f"Saved: {save_path}")
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                }, save_path) 
+            wandb.save(save_path)
+        if l1loss< lowest_l1 and rank==0:
+            best_path = os.path.join(FLAGS.save_dir, FLAGS.name + '_best.pt')
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                }, best_path) 
+            wandb.save(best_path)
+        epoch += 1
             
     dist.destroy_process_group()
 

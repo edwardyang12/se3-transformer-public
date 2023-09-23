@@ -3,6 +3,7 @@ import sys
 
 import dgl
 from dgl.data.utils import load_graphs
+from sklearn.preprocessing import QuantileTransformer
 import numpy as np
 import torch
 import pickle
@@ -36,6 +37,7 @@ class AlphaDataset(Dataset):
         self.transform = transform
         self.load_data()
         self.len = len(self.targets)
+        self.qt = None # quantile transform for normal distribution of data
 
 
         self.atom_feature_size = atom_feature_size # NOTE change this depenending on number of node features
@@ -81,7 +83,11 @@ class AlphaDataset(Dataset):
                     self.inputs.append(x)
                     self.targets.append(enrichment)
                     self.immuno_list.append(immuno)
-    
+
+        self.targets = np.array(self.targets).reshape(-1,1)
+        self.qt = QuantileTransformer(n_quantiles=10, random_state=0, output_distribution='normal')
+        self.targets = self.qt.fit_transform(self.targets).reshape(-1)
+
         self.mean = np.mean(self.targets)
         self.std = np.std(self.targets)
 
